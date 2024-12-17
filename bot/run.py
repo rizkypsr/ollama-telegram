@@ -9,6 +9,7 @@ import traceback
 import io
 import base64
 import sqlite3
+import re
 bot = Bot(token=token)
 dp = Dispatcher()
 start_kb = InlineKeyboardBuilder()
@@ -47,6 +48,9 @@ mention = None
 selected_prompt_id = None  # Variable to store the selected prompt ID
 CHAT_TYPE_GROUP = "group"
 CHAT_TYPE_SUPERGROUP = "supergroup"
+
+# Define trigger words for the bot
+TRIGGER_WORDS = ['shin', 'shine', 'sin']
 
 def init_db():
     conn = sqlite3.connect('users.db')
@@ -333,18 +337,23 @@ async def handle_message(message: types.Message):
 async def is_mentioned_in_group_or_supergroup(message: types.Message):
     if message.chat.type not in ["group", "supergroup"]:
         return False
-    
-    is_mentioned = (
-        (message.text and message.text.startswith(mention)) or
-        (message.caption and message.caption.startswith(mention))
-    )
-    
+
+    # Compile a regex pattern to match whole words, case-insensitive
+    pattern = re.compile(r'\b(' + '|'.join(TRIGGER_WORDS) + r')\b', re.IGNORECASE)
+
+    message_text = message.text if message.text else ""
+    message_caption = message.caption if message.caption else ""
+
+    # Check if any trigger word is present in the message text or caption
+    contains_trigger_word = bool(pattern.search(message_text)) or bool(pattern.search(message_caption))
+
+    # Check if the message is a reply to the bot
     is_reply_to_bot = (
         message.reply_to_message and 
         message.reply_to_message.from_user.id == bot.id
     )
-    
-    return is_mentioned or is_reply_to_bot
+
+    return contains_trigger_word or is_reply_to_bot
 
 async def collect_message_thread(message: types.Message, thread=None):
     if thread is None:
@@ -414,7 +423,8 @@ async def handle_response(message, response_data, full_response):
     if full_response_stripped == "":
         return
     if response_data.get("done"):
-        text = f"{full_response_stripped}\n\n⚙️ {modelname}\nGenerated in {response_data.get('total_duration') / 1e9:.2f}s."
+        # text = f"{full_response_stripped}\n\n⚙️ {modelname}\nGenerated in {response_data.get('total_duration') / 1e9:.2f}s."
+        text = full_response_stripped
         await send_response(message, text)
         async with ACTIVE_CHATS_LOCK:
             if ACTIVE_CHATS.get(message.from_user.id) is not None:
@@ -428,16 +438,45 @@ async def handle_response(message, response_data, full_response):
     return False
 
 async def send_response(message, text):
-    # A negative message.chat.id is a group message
-    if message.chat.id < 0 or message.chat.id == message.from_user.id:
-        await bot.send_message(chat_id=message.chat.id, text=text,parse_mode=ParseMode.MARKDOWN)
-    else:
-        await bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            text=text,
-            parse_mode=ParseMode.MARKDOWN,
-        )
+    # Escape special Markdown characters
+    def escape_markdown(text):
+        # Characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+        escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
+    try:
+        escaped_text = escape_markdown(text)
+        # A negative message.chat.id is a group message
+        if message.chat.id < 0 or message.chat.id == message.from_user.id:
+            await bot.send_message(
+                chat_id=message.chat.id, 
+                text=escaped_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                text=escaped_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+    except Exception as e:
+        # Fallback to sending without markdown if parsing fails
+        logging.warning(f"Failed to send message with Markdown, falling back to plain text: {str(e)}")
+        plain_text = text.replace('*', '').replace('_', '')  # Remove markdown formatting
+        if message.chat.id < 0 or message.chat.id == message.from_user.id:
+            await bot.send_message(
+                chat_id=message.chat.id, 
+                text=plain_text
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                text=plain_text
+            )
 
 async def ollama_request(message: types.Message, prompt: str = None):
     try:
