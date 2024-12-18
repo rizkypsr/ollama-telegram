@@ -104,11 +104,12 @@ async def generate(payload: dict, modelname: str, prompt: str):
     async with aiohttp.ClientSession(timeout=client_timeout) as session:
         url = f"http://{ollama_base_url}:{ollama_port}/api/chat"
 
-        # Prepare the payload according to Ollama API specification
+        # Prepare the payload with num_ctx and keep_alive
         ollama_payload = {
             "model": modelname,
             "messages": payload.get("messages", []),
-            "stream": payload.get("stream", True)
+            "stream": payload.get("stream", True),
+            "keep_alive": "1h"
         }
 
         try:
