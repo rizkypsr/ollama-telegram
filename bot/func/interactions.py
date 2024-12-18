@@ -9,6 +9,8 @@ from aiohttp import ClientTimeout
 from asyncio import Lock
 from functools import wraps
 from dotenv import load_dotenv
+from aiogram.enums import ParseMode
+import re
 load_dotenv()
 token = os.getenv("TOKEN")
 allowed_ids = list(map(int, os.getenv("USER_IDS", "").split(",")))
@@ -231,3 +233,39 @@ class contextLock:
 
     async def __aexit__(self, exc_type, exc_value, exc_traceback):
         self.lock.release()
+
+def remove_html_tags(text):
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', text)
+
+async def send_response(message, text):
+    try:
+        sanitized_text = remove_html_tags(text)
+        escaped_text = escape_markdown(sanitized_text)  # Assuming escape_markdown is defined
+        if message.chat.id < 0 or message.chat.id == message.from_user.id:
+            await bot.send_message(
+                chat_id=message.chat.id, 
+                text=escaped_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                text=escaped_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+    except Exception as e:
+        logging.warning(f"Failed to send message with Markdown, falling back to plain text: {str(e)}")
+        plain_text = remove_html_tags(text)
+        if message.chat.id < 0 or message.chat.id == message.from_user.id:
+            await bot.send_message(
+                chat_id=message.chat.id, 
+                text=plain_text
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                text=plain_text
+            )
